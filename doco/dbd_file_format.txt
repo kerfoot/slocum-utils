@@ -1,0 +1,664 @@
+doco/specifications/dbd_file_format.txt
+
+01-May-01 tc@DinkumSoftware.com Initial
+07-May-01 tc@DinkumSoftware.com Fixed typos
+09-May-01 tc@DinkumSoftware.com Updated compression for
+                                variable # of bytes
+15-May-01 tc@DinkumSoftware.com Noted SBD data rate
+19-Jul-01 tc@DinkumSoftware.com dbd2asc merges multiple files
+26-Sep-01 tc@DinkumSoftware.com Encoding version 2, Added ability to send doubles
+ 6-Dec-01 tc@DinkumSoftware.com Documented dba_time_filter
+30-Sep-02 tc@DinkumSoftware.com Put in a HISTORY OF RELEASED VERSIONS section
+18-Jul-03 fnj@DinkumSoftware.com Encoding version 4, sensor list factoring:
+                                 added keys sensor_list_crc and sensor_list_factored.
+02-Jan-04 trout.r@comcast.net Documented dba_sensor_filter
+21-Jan-04 trout.r@comcast.net Documented changes to .dba headers and the
+                              introduction of dba2_glider_data exe.
+08-Mar-04 tc@DinkumSoftware.com Removed FUTURE PLANS/dba_include as it was
+                                implemented as dbd_sensor_filter
+25-Aug-2008 fnj@webbresearch.com Reformatted; fixed typos and awkward phrasing.
+                                 Updated to refrect current reality (# sensors).
+                                 Didn't mention 8 byte data encoding.
+                                 N.B. STILL NEEDS SOME WORK.
+ 1-Oct-09 tc@DinkumSoftware.com Added section on dba_merge
+
+This document specifies the Dinkum Binary Data format.  This is the format
+of the data transmitted from Webb Research Glider to a host computer
+for processing.
+
+Table of contents
+    >>>HISTORY and RATIONALE
+    >>>MISSION NUMBERING SCHEME
+    >>>DBD FORMAT
+    >>>HOST SIDE PROCESSING
+       >>>>>>rename_dbd_files:
+       >>>>>>dbd2asc:
+       >>>>>>dba_merge:
+       >>>>>>dba_time_filter
+       >>>>>>dba_sensor_filter
+       >>>>>>dba2_orig_matlab:
+       >>>>>>dba2_glider_data
+    >>>DBA FORMAT
+    >>>DATA SIZE REDUCTION RESULTS
+    >>>FUTURE PLANS
+    >>>HISTORY OF RELEASED VERSIONS
+
+>>>HISTORY and RATIONALE
+
+The Glider originally used an OBD (Odyssey Binary Data) format.  This
+consisted of an ASCII header and binary data representing "sensor data".
+On every cycle, 6 bytes were transmitted for every sensor that was updated
+with a new value: 2 bytes of sensor number and 4 bytes of floating point
+data representing the sensor.
+
+This format had a couple of problems:
+    1. Once on the host, one couldn't tell whether a sensor was updated
+       with the same value -or- it wasn't updated.  This presented a severe
+       problem for artificial, i.e. non real-world, sensors.
+
+    2. The data compression wasn't optimal:
+        a. Sensors with small dynamic range, e.g. 0 or 1, still required
+           4 bytes to transmit.
+        b. The overhead of two bytes for each sensor number was excessive.
+
+To address these needs, the DBD (Dinkum Binary Data) format was invented.
+It consists of:
+    An ASCII header.
+    A list of sensor names, units, and number of bytes encoded in.
+    Binary data representing "changed" sensors on each cycle.
+
+The binary data is encoded quite differently.  At the beginning of every
+cycle, two bits are transmitted for EVERY sensor.  These two bits encoded
+one of three states:
+    The sensor wasn't updated.
+    The sensor was updated with the same value.
+    The sensor was updated with a new value.
+
+This "cycle state" is followed by the binary values (at 1, 2, or 4 bytes)
+for only those sensors that were updated with a new value.
+
+This adds some fixed overhead per cycle of transmitting 2 bits for every
+sensor (about 190 bytes currently). If 13% or more of the sensors change
+on every cycle, the new format results in less data while still fully
+communicating the state of all sensors over time.  In a one hour simulated
+mission, 16% of the variables changed per cycle.
+
+See DATA SIZE REDUCTION RESULTS for final numerical comparisons.
+
+>>>MISSION NUMBERING SCHEME
+
+A mission is uniquely identified by 2 different numbers:
+    unique_mission_number    0-9999
+    mission_segment          0-9999
+and by the name of the glider which produced it.
+
+For a given glider, each mission is given a unique number.  The number for
+the first mission is 0.  The number is then incremented every time a mission
+is started over the life of the vehicle.  A mission can be broken into
+a number of segments.  The initial segment of a mission is segment 0.
+
+A new segment can be created any number of ways:
+    The mission is interrupted and resumed by operator at a keyboard.
+    The glider surfaces to transmit data.
+    The glider decides to do so because the current segment is too "big".
+
+The most visible impact of segments relates to log files.  When a segment
+is ended, all the log files are closed and flushed to disk.  When a new
+segment is created, new mission files are opened with different file
+names.
+
+There are a number of strings/filenames related to mission_number and segment.
+There are a number of constraints on these filenames.  Primarily, the
+Persistor only has an 8.3, case-not-significant, filesystem: i.e.,
+filenames can only be 8 chars plus a period and a 3 char extension.
+
+In the old *.OBD file days, a mission was identified as "Z0122202.xxx", where:
+    Z      First letter of vehicle name.
+    01     The last two digits of year.
+    222    The day in the year.
+    02     The (n-1)th (3rd) mission of day.
+
+This didn't let us handle segments or very many different vehicle names.
+So to get around these limitations, we have two "names" for each log file:
+an 8.3 compatible short name and an essentially unconstrained long name.
+The 8.3 name simply needs to be unique on a particular glider's filesystem.
+Once it is transferred to another computer with a reasonable file system,
+it gets renamed to the long file name.  There are host side tools to do this
+automatically (see rename_dbd_files).
+
+The 8.3 name is:
+    mmmmssss.xxx
+
+where:
+    mmmm    The unique mission number.
+    ssss    The mission segment number.
+    xxx     Either dbd, sbd, or mbd.
+
+After 10,000 missions or segments, the pieces of the 8.3 name wrap around,
+but the long name.
+
+The long filename looks like:
+    zippy-2001-222-04-05.xxx
+
+where:
+    zippy    Vehicle name.
+    2001     The year AT START OF MISSION.
+    222      Day of year AT START OF MISSION.
+    04       The (n-1)th (5th) mission of the day.
+    05       The (n-1)th (6th) segment of the mission.
+
+Both the 8.3 name and the long name are stored within each the data file
+(no matter whether the filename is the 8.3 kind or the long kind).
+
+When used for labeling, a string of the form is used:
+    zippy-01-222-04-05(0123.0005)
+
+The long-term memory of unique_mission_number/segment is kept in disk file
+"/state/mis_num.txt" on the glider.  You should never delete this file,
+it periodically gets trimmed in length.  The format is:
+
+    mmmm    ssss  YY DDD UUUU zippy-01-222-04-05
+
+where:
+    mmmm     The unique mission number.
+    ssss     The mission segment number.
+    zippy    The long base filename.
+    YY       Year of mission start.
+    DDD      Day of year of mission start.
+    UUUU     Mission number of the day.
+
+>>>DBD FORMAT
+
+The details of the DBD Format:
+
+    <<AN ASCII HEADER>>
+    <<A sensor list in ASCII>>    UNLESS FACTORED
+    <<A known bytes binary cycle>>
+    <<A data cycle with every sensor value transmitted>>
+    <<data cycles>>
+       .....
+    <<end of file cycle>>
+
+
+    <<AN ASCII HEADER>>
+
+An example ASCII header is shown below.  It consists of whitespace separated
+(key,value) pairs:
+
+    dbd_label:    DBD(dinkum_binary_data)file
+    encoding_ver:    5
+    num_ascii_tags:    14
+    all_sensors:    T
+    the8x3_filename:    00410011
+    full_filename:    zippy-2008-238-41-11
+    filename_extension:    dbd
+    mission_name:    GLMPC.MI
+    fileopen_time:    Mon_Aug_25_22:37:13_2008
+    total_num_sensors:    1491
+    sensors_per_cycle:    1491
+    state_bytes_per_cycle:    373
+    sensor_list_crc:    AF38D897
+    sensor_list_factored:    0
+
+The meanings of the fields:
+    dbd_label:             Identifies it as a Dinkum Binary Data file.
+    encoding_ver:          What encoding version: 5.  (Version 0
+                           is reserved for the future development
+                           of an OBD to DBD translator.)
+    num_ascii_tags:        The number of (key,value) pairs: 14.
+    all_sensors:           T (TRUE) means every sensor is being transmitted;
+                           F (FALSE) means only some sensors are being
+                           transmitted, i.e. this is an *.SBD or *.MBD file.
+    the8x3_filename:       The filename on the Glider: 00410011, which
+                           stands for the 12th segment of the 41st mission
+                           this glider has ever flown.
+    full_filename:         What the filename should be on the host
+                           (not counting the extension).
+    filename_extension:    
+    mission_name:          The name of the mission file being run.
+    fileopen_time:         Human readable date string.
+    total_num_sensors:     Total number of sensors in the system.
+    sensors_per_cycle:     Number of sensors we are transmitting.
+    state_bytes_per_cycle: The number of "state bytes" sent per cycle.
+                           These are the state @ 2 bits/sensor.
+    sensor_list_crc:       CRC32 of the section <<A sensor list in ASCII>>.
+    sensor_list_factored:  1 if the section <<A sensor list in ASCII>>
+                           is present, 0 if factored out.
+
+    <<A sensor list in ASCII>>
+
+This section is not present in every file.
+
+It is present if sensor_list_factored (see above) is 0,
+and it is not present if sensor_list_factored is 1.
+
+If it is not present, the topside processing software has to find the correct
+<<A sensor list in ASCII>> by inspecting other files, looking for one with
+the same sensor_list_crc, and a sensor_list_factored of 0.
+
+Factoring is controlled by the value of the sensor u_dbd_sensor_list_xmit_control.
+
+If <<A sensor list in ASCII>> is present:
+
+One line is sent for EVERY sensor, regardless of whether it
+is being transmitted.  An example list:
+
+    s: T    0    0 4 f_max_working_depth m
+    s: T    1    1 4 u_cycle_time s
+    s: T    2    2 4 m_present_time s
+       .....
+
+
+The "s:" marks a sensor line.
+
+The next field is either:
+    T    Sensor being transmitted.
+    F    Sensor is NOT being transmitted.
+
+The next field is the sensor number, from 0 to (total_num_sensors-1).
+
+The next field is the index, from 0 to (sensors_per_cycle-1), of all the
+sensors being transmitted.  -1 means the sensor is not being transmitted.
+If all_sensors is TRUE, then this and the prior field will be identical.
+
+The last numerical field is the number of bytes transmitted for each sensor:
+    1    A 1 byte integer value [-128 .. 127].
+    2    A 2 byte integer value [-32768 .. 32767].
+    4    A 4 byte float value (floating point, 6-7 significant digits,
+                               approximately 10^-38 to 10^38 dynamic range).
+    8    An 8 byte double value (floating point, 15-16 significant digits,
+                                 approximately 10^-308 to 10^308 dyn. range).
+
+The last two fields are the sensor name and its units.
+
+    <<A known bytes binary cycle>>
+
+Three known binary values are transmitted.  This allows the host
+to detect if any byte swapping is required:
+    s                  Cycle Tag (this is an ASCII s char).
+    a                  One byte integer.
+    0x1234             Two byte integer.
+    123.456            Four byte float.
+    123456789.12345    Eight byte double.
+
+    <<A data cycle with every sensor value transmitted>>
+
+This is like a regular data cycle, but every sensor is marked as updated
+with a new value.  This represents the initial value of all sensors.
+See <<data cycle>> for the format.
+
+    <<data cycle>>
+
+The data cycle consists of:
+    d                Cycle tag (this is an ASCII d char).
+    <state bytes>    There are state_bytes_per_cycle of these binary bytes.
+    <sensor data>    1,2,4, or 8 binary bytes for every sensor that was
+      ....                    updated with a new value.
+    <sensor data>
+
+The state bytes consist of 2 bits per sensor.  The MSB of the first byte is
+associated with the first transmitted sensor.  The next two bits, with the
+next sensor, etc.  Any unused bits in the last byte will be 0.
+
+The meanings of the two bit field for each sensor:
+    MSB    LSB
+    0      0    Sensor NOT updated.
+    0      1    Sensor updated with same value.
+    1      0    Sensor updated with new value.
+    1      1    Reserved for future use.
+
+    <<end of file cycle>>
+    X    cycle tag (a single ASCII X char).
+
+There may very well be data in the file after this last cycle.  It should be
+ignored.  The Persistor currently has a really annoying habit of transmitting
+a bunch of Control-Z characters after the end of valid data.
+This ought to be fixed.
+
+>>>HOST SIDE PROCESSING
+
+>>>>>>rename_dbd_files:
+
+A program, rename_dbd_files, will rename the transmitted mmmmssss.dbd
+files to their full filenames.  Versions of this program
+exist for Windows and Linux.
+
+It takes its arguments from the command line AND
+from stdin if -s is on the command line.
+
+Usage: rename_dbd_files [-s] <file> ... <file>
+
+The names of all renamed files are echoed to
+stdout.  Any non-dbd file or a *.dbd file that
+has already been renamed will be silently ignored.
+So, "rename_dbd_files *" works just fine.  For windows
+users, I might suggest:
+
+    dir /b *.* | rename_dbd_files -s
+
+
+>>>>>>dbd2asc:
+
+A single program, dbd2asc, will read a DBD (or SBD) file(s) and
+convert them to a pure ASCII format.  Versions of this program
+exist for Windows and Linux.
+
+Usage: (this may be dated)
+    dbd2asc [-s] <filename> ... <filename>
+
+Builds a list of files (DBD or SBD) from all the filenames
+on the command line and from stdin if -s is present.
+
+The data from all the files are merged and written to
+stdout in an ASCII format. See next section, >>>DBA FORMAT,
+for a description.
+
+The intent is to provide a series of filters, which are piped
+together to produce the desired results.
+
+The following will process all the DBD files in a directory:
+    Windows:    dir /b *.dbd | dbd2asc -s
+
+The following will process all the SBD files from a given mission:
+    Linux:   ls cassidy-2001-193-28-*.sbd | dbd2asc -s 
+
+
+
+>>>>>>dba_merge:
+
+usage: dba_merge [-h|--help] glider_dba_filename science_dba_filename
+
+glider_dba_filename + science_dba_filename ==> STDOUT
+
+ This program merges:
+    glider_dba_filename  (dbd2asc *.dbd/mbd/sbd)
+    science_dba_filename (dbd2asc *.ebd/nbd/tbd) -and-
+into a single data file and delivers output to STDOUT.
+
+This program reads and writes only ASCII data (output of dbd2asc).
+This program was required when logging on science was introduced in 2009.
+
+   -h                    Print this message
+
+DISCUSSION:
+
+There are two sources of data in a glider.  Most is generated on the
+glider processor.  Some (which the user generally cares the most about)
+is generated on the science processor.
+
+In the early days, the science data was transmitted to the glider
+processor, merged in real time, and stored in a single dbd/mbd/sbd
+file.  That file was transmitted to shore and processed using the
+tools described in this document.
+
+Over the years, as the glider processor got busy and the amount
+of data substantial increased, the in-situ merging of data became
+problomatic.  In late 2009 (around version 6.38) these problems
+were resolved by logging the science originated data on the
+science processor in it's own data files.  Each dbd/mbd/sbd file
+on the glider has a corresponding ebd/nbd/tbd file (one letter added
+to file extension).  All of the science files (ebd/nbd/tbd) are in
+the same *.dbd format as described in this document.
+
+dba_merge was created to merge the pairs of glider/science files
+into a single time-order stream.  The output is in the dba format
+to minimize the distruption of customer down stream data processing.
+
+For example, prior to science data logging:
+
+                         dbd2asc
+    gld-2009-232-10-0.sbd |
+    gld-2009-232-10-1.sbd } => gld-2009-232-10-X.dba ==> downstream processing
+    gld-2009-232-10-2.sbd |
+                        
+after science data logging
+                         dbd2asc
+    gld-2009-232-10-0.sbd |
+    gld-2009-232-10-1.sbd } => gld-2009-232-10-X-sbd.dba
+    gld-2009-232-10-2.sbd |
+
+    gld-2009-232-10-0.tbd |
+    gld-2009-232-10-1.tbd } => gld-2009-232-10-X-tbd.dba
+    gld-2009-232-10-2.tbd |
+
+                             dba_merge
+    gld-2009-232-10-X-sbd.dba |
+    gld-2009-232-10-X-tbd.dba } => gld-2009-232-10-X.dba ==> downstream processing
+
+The intent is that the customer substitutes the output of dba_merge for
+the output of the original dba2asc and no other modifications are required.
+Time will tell how well this objective was achieved.
+
+One nuance is how to handle sensors(variables) that appear in both
+the glider and science files.  This generally doesn't happen in {s,t}bd and {m,n}bd files.
+It always happens in {d,e}bd files.  The chosen solution was to include both
+sets of values in the output of dba_merge, but to rename the sensor copy from
+the processor that didn't originate the value:
+
+    sci_XXX  ==> gld_dup_sci_XXX
+    YYY      ==> sci_dup_YYY    
+
+The idea is that sci_XXX originates on science and the science copy should be preserved.
+Otherwise, YYY originates on the glider and the glider copy should be preserved
+
+
+>>>>>>dba_time_filter
+
+    Reads dinkum binary ascii data from stdin (output of dbd2asc)
+    Throws away some data based on time
+    Writes the remainder ad dinkum binary ascii data to stdout 
+
+Usage:
+    dba_time_filter [-help] [-epoch] earliest_included_t latest_included_t
+
+All records between earliest_included_t and latest_included_t
+(inclusive) are output.  All others are discarded.  The time is
+normally based on mission time (M_PRESENT_SECS_INTO_MISSION).  If
+-epoch is present, time is based on seconds since 1970 (M_PRESENT_SECS)
+
+A -tf is added to the filename of the output header, e.g.
+    filename: zippy-2001-222-04-05  --> zippy-2001-222-04-05-tf
+
+
+
+>>>>>>dba_sensor_filter
+
+    Reads dinkum binary ascii format from stdin (output of dbd2asc)
+    Excludes the data of sensors NOT listed on the command line or in
+      the -f <sensors_filename>
+    Writes the data of remaining sensors in dinkum binary ascii format to stdout 
+
+Usage:
+    dba_sensor_filter [-h] [-f <sensors_filename>] [sensor_name_0 ... sensor_name_N]
+
+Accepts a .dba file from stdin.  The data corresponding to sensors
+listed on the command line or in the -f <sensors_filename> are written
+to stdout as a .dba file.  All other sensor data is discarded.  Sensor names
+in -f <sensors_filename> should be line or space delimited.
+
+A -sf is added to the filename of the output header, e.g.
+    filename: zippy-2001-222-04-05  --> zippy-2001-222-04-05-sf
+
+
+
+>>>>>>dba2_orig_matlab:
+
+Reads dinkum binary ASCII data from stdin (output of dbd2asc)
+and writes two matlab files (your filenames will vary):
+
+    zippy_2001_104_21_0_dbd.m
+    zippy_2001_104_21_0_dbd.dat
+
+The output format is identical to the initial matlab files produced
+in the development of the Webb Research Glider.
+
+To use the file, from matlab, execute:
+    zippy_2001_104_21_0_dbd.m
+
+Thus a typical usage is:
+    dbd2asc 0041001.dbd | dba2_orig_matlab
+
+As other data processing needs arise, additional filters can
+be written.  See >>>FUTURE PLANS for some that have been conceived,
+but not implemented yet.
+
+>>>>>>dba2_glider_data:
+
+Reads dinkum binary ASCII data from stdin (output of dbd2asc)
+and writes two matlab files (your filenames will vary):
+
+    zippy_2001_104_21_0_gld.m
+    zippy_2001_104_21_0_gld.dat
+
+The .m file contains the same information as the .m file produced by
+dba2_orig_matlab but formatted as a matlab struct.  In addition, this
+struct contains the segment filenames corresponding to the input .dba
+file's composite .dbd files, and it contains struct elements representing
+all of the .dba header keys and values.  The .dat file is the same as that
+produced by dba2_orig_matlab.
+
+The generated .m and .dat files are for consumption by the Matlab
+Glider_Data application.
+
+Typical usage is:
+    dbd2asc 0041001.dbd | dba2_glider_data
+
+>>>DBA FORMAT
+
+The DBA Format is all ASCII and consists of:
+
+    <<An ASCII header>>
+    << A list of whitespace separated sensor names all on 1 line>>
+    << A list of whitespace separated sensor units all on 1 line>>
+    << A list of whitespace separated sensor bytes all on 1 line>>
+    << A cycle's worth of data as whitespace separated ASCII>>
+
+An example portion of a file is shown below:
+
+    dbd_label: DBD_ASC(dinkum_binary_data_ascii)file
+    encoding_ver: 0
+    num_ascii_tags: 14
+    all_sensors: 1
+    filename: zippy-2001-119-2-0
+    the8x3_filename: 00440000
+    filename_extension: dbd
+    filename_label: zippy-2001-119-2-0-dbd(00440000)
+    mission_name: SASHBOX.MI
+    fileopen_time: Mon_Apr_30_17:28:25_2001
+    sensors_per_cycle: 216
+    num_label_lines: 3
+    num_segments: 1
+    segment_filename_0: zippy-2001-119-2-0
+    f_max_working_depth u_cycle_time m_present_time   ....
+    m s s s s nodim nodim nodim nodim nodim enum X    ....
+    4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4   ....
+    30 2 9.88652e+08 0 0.07 1119 -1 -3 -3 -3 3 0 1    ....
+    NaN NaN 9.88652e+08 2.902 NaN NaN NaN NaN NaN NaN ....
+    NaN NaN 9.88652e+08 5.664 NaN NaN NaN NaN NaN NaN ....
+
+
+The (key,value) pairs in the header have the same meanings as
+in the DBD file.  Additionally, optional keys may appear in the DBA
+header.  The num_segments: and segment_filename_0: are examples.
+The num_segments: key represents how many .dbd files (i.e., segments)
+were merged to produce the .dba file.  The segment_filename_X:
+keys are the long filenames of the .dbd segments.
+
+The NaN entry for data means that the sensor
+was not updated that cycle.
+
+The labels in an ascii header may have a number of Xs in
+them when multiple data sets are merged.  Basically any
+characters in the ascii header fields which are different
+in any of the input DBD files are replaced by an X.  An example
+may help:
+
+    dbd2asc cassidy-2001-193-28-0.dbd cassidy-2001-193-28-1.dbd ...
+            cassidy-2001-193-28-2.dbd cassidy-2001-193-28-3.dbd 
+
+Would result in the following header:
+    dbd_label: DBD_ASC(dinkum_binary_data_ascii)file
+    encoding_ver: 0
+    num_ascii_tags: 17
+    all_sensors: 1
+    filename: cassidy-2001-193-28-X
+    the8x3_filename: 0088000X
+    filename_extension: dbd
+    filename_label: cassidy-2001-193-28-X(0088000X)
+    mission_name: BOX.MI
+    fileopen_time: Fri_Jul_13_2X:XX:XX_2001
+    sensors_per_cycle: 249
+    num_label_lines: 3
+    num_segments: 4
+    segment_filename_0: cassidy-2001-193-28-0
+    segment_filename_1: cassidy-2001-193-28-1
+    segment_filename_2: cassidy-2001-193-28-2
+    segment_filename_3: cassidy-2001-193-28-3
+
+The Xs in the header represent characters that are different
+in the four input DBD file headers.
+
+
+>>>DATA SIZE REDUCTION RESULTS
+
+On a simulated one hour mission:
+
+    the OBD format generated 381 Kbytes/hour
+
+    the DBD format (transmitting 4 bytes for every sensor)
+    generated 278 Kbytes/hour.  A 27% improvement.
+
+    The DBD format (transmitting a variable number of
+    bytes per sensor) generated 289 Kbytes/hour.  Note that this
+    is bigger than the 4 bytes/sensor.  It was the same mission,
+    but longer.  I can only assume that the extra mission time
+    involved actions that resulted in more variables changing.
+    This should probably be investigated.
+
+
+On a simulated five hour mission:
+
+   The SBD sensor list from New Jersey '00 (24 sensors) produced
+   data at the rate of 50Kbytes/hour.
+
+>>>FUTURE PLANS
+
+   none at the moment
+
+
+>>>HISTORY OF RELEASED VERSIONS
+
+01-May-01 In the beginning .....
+    host side programs had no revision number
+    dbd encoding version: 1
+    dba encoding version: 0
+
+
+26-Sep-01 extended file format to handle 8 byte doubles
+    host side programs had no revision number
+    dbd encoding version: 2
+    dba encoding version: 0
+
+30-Sep-02 Changed dbd generation and host side processing
+          to suppress duplicate timestamps on the first
+          lines of data in a non-initial segment that
+          was processed standalone.  The basic change was
+          to have host side processing NOT output the initial
+          line of data in any segment.  The glider code was
+          changed to insure we didn't miss any updates
+    dbd2asc                      version 1.0
+    other host side programs     no revision number
+    dbd encoding version:        3
+    dba encoding version:        1
+
+25-Jan-04 Changed dba files to allow optional header keys to
+          appear in the header.  The segment_filename_X keys
+          represent the first use of optional keys and were
+          introduced with optional keys.  The segment filename
+          keys record the long names of the dba's composite
+          dbd files (i.e., segments).  These keys are used
+          by the glider_data matlab application to efficiently
+          merge segments.
+    dba encoding version:       2
+
+

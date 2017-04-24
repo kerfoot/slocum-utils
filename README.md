@@ -6,9 +6,9 @@ Collection of utilities for working with Slocum glider data.
 The utilities contained in the repo must be run in a linux (not iOS)
 environment.  There are linux and windows version of the  binary to ascii
 conversion executables provided by Teledyne Webb Research Corporation,
-however this repo is written with the linux operating system in mind.
+but windows is not supported by this repo.
 
-#Installation
+# Installation
 
 The repo is installed by:
 

@@ -2,9 +2,9 @@
 
 PATH=/bin:/usr/bin
 
-# Shell script basename
+# Script basename
 app=$(basename $0);
-# Shell script absolute directory
+# Script absolute directory
 app_dir=$(dirname $(which $0));
 
 # Permissions for cac files
@@ -114,7 +114,7 @@ shift $((OPTIND-1));
 
 # Validate executables location
 # TWRC_EXE_DIR: use environment variable if set, otherwise use
-# $local_twrc_exe_dir which defaults to the app location or user-specified via
+# $local_twrc_exe_dir which defaults to the app location OR user-specified via
 # -b
 TWRC_EXE_DIR=${TWRC_EXE_DIR:-$local_twrc_exe_dir};
 [ -z "$quiet" ] && echo "TWRC executables directory: $TWRC_EXE_DIR";
@@ -125,7 +125,7 @@ then
     exit 1;
 fi
 
-# Make sure the required TWRC utilities are available
+# Make sure the TWRC utilities are available
 dbd2asc="${TWRC_EXE_DIR}/dbd2asc";
 if [ ! -x "$dbd2asc" ]
 then
@@ -168,21 +168,26 @@ then
     exit 1;
 fi
 
-# Display usage if no files are specified
-if [ "$#" -eq 0 ]
+# Display usage if no source directory and destination directory were
+# specified
+if [ "$#" -ne 2 ]
 then
     echo "$USAGE";
-    echo "SOURCEDIR not specified";
+    echo "SOURCEDIR and DESTDIR not specified";
     exit 1;
-elif [ "$#" -eq 1 ]
-then
-    dbdRoot=$1;
-    ascDest=$1;
-elif [ "$#" -gt 1 ]
-then
-    dbdRoot=$1;
-    ascDest=$2;
+#elif [ "$#" -eq 1 ]
+#then
+#    dbdRoot=$1;
+#    ascDest=$1;
+#elif [ "$#" -gt 1 ]
+#then
+#    dbdRoot=$1;
+#    ascDest=$2;
 fi
+
+# Set SOURCEDIR and DESTDIR
+dbdRoot=$1;
+ascDest=$2;
 
 # Get absolute paths for the source and destination directory
 dbdRoot=$(readlink -e $dbdRoot);
@@ -192,7 +197,7 @@ ascDest=$(readlink -e $ascDest);
 [ -z "$quiet" ] && echo "Binary source: $dbdRoot";
 [ -z "$quiet" ] && echo "ASCII destination: $ascDest";
 
-# If specified, validate the sensor list to filter by
+# If specified, validate the sensor list for filtering
 if [ -n "$sensor_filter" ]
 then
     if [ ! -f "$sensor_filter" ]
@@ -215,10 +220,6 @@ then
     exit 1;
 fi
 [ -z "$quiet" ] && echo "Temp conversion directory: $tmpDir";
-# Change to temporary directory
-cd $tmpDir > /dev/null;
-# Remove $tmpDir if SIG
-trap "{ rm -Rf $tmpDir; exit 255; }" SIGHUP SIGINT SIGKILL SIGTERM SIGSTOP;
 
 # If the location of the .CAC files has not been set, dbd2asc creates a
 # directory, 'cache', in the curret working directory.  In this case, we'll
@@ -228,6 +229,7 @@ if [ -z "$local_cac_dir" ]
 then
     local_cac_dir=${DBD_CACHE_DIR:-${dbdRoot}/cache};
 fi
+local_cac_dir=$(readlink -e $local_cac_dir);
 # Create the sensor list cache directory if it doesn't exist
 if [ ! -d "$local_cac_dir" ]
 then
@@ -236,6 +238,11 @@ then
     [ "$?" -ne 0 ] && exit 1;
 fi
 [ -z "$quiet" ] && echo "Sensor list cache directory: $local_cac_dir";
+
+# Change to temporary directory
+cd $tmpDir > /dev/null;
+# Remove $tmpDir if SIG
+trap "{ rm -Rf $tmpDir; exit 255; }" SIGHUP SIGINT SIGKILL SIGTERM SIGSTOP;
 
 # Convert each file individually and move the created files to the location of
 # the source binary files

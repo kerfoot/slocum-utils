@@ -15,15 +15,15 @@ USAGE="
 $app
 
 NAME 
-    $app - Convert and merge Slocum glider binary files
+    $app - Convert and merge native Slocum glider binary flight and science data files
 
 SYNOPSIS
-    $app [hdrf] SOURCEDIR DESTDIR
+    $app [-h] [-f SENSOR_LIST] [-c DBD_CACHE_DIR] [-m] [-e EXTENSION] [-b TWRC_EXE_DIR] [-q] SOURCEDIR DESTDIR
 
 DESCRIPTION
     Convert and merge all binary *.[demnst]bd files in SOURCEDIR and write the
-    corresponding Matlab data files to DESTDIR.  If present, the following 
-    flight/science controller file pairs are merged:
+    output data files to DESTDIR.  If present, the following flight/science 
+    controller file pairs are merged:
 
      FLIGHT/SCIENCE
      --------------
@@ -66,8 +66,7 @@ DESCRIPTION
 ";
 
 # Default option values
-# Location of dbd2asc, etc TWRC executables used to convert and merge binary
-# files
+# Location of dbd2asc, etc TWRC executables used to convert and merge binary files
 local_twrc_exe_dir="${app_dir}/linux-bin";
 # Default ascii file extension
 dba_extension='dat';
@@ -151,9 +150,32 @@ then
     exit 1;
 fi
 
-# Soure and destination default to current directory
-dbdRoot=$(pwd);
-ascDest=$(pwd);
+# Display usage if no source directory and destination directory were specified
+if [ "$#" -eq 0 ]
+then
+    echo "$USAGE";
+    echo "No SOURCEDIR and DESTDIR specified" >&2;
+    exit 1;
+elif [ "$#" -eq 1 ]
+then
+    echo "$USAGE";
+    echo "DESTDIR not specified" >&2;
+    exit 1;
+elif [ "$#" -gt 2 ]
+then
+    echo "$USAGE";
+    echo "Please specify a single SOURCEDIR and single DESTDIR" >&2;
+    exit 1;
+fi
+
+# Set SOURCEDIR and DESTDIR
+dbdRoot=$1;
+ascDest=$2;
+
+# Get absolute paths for the source and destination directory
+dbdRoot=$(readlink -e $dbdRoot);
+ascDest=$(readlink -e $ascDest);
+
 # Validate source and destination directories
 if [ ! -d "$dbdRoot" ]
 then
@@ -167,31 +189,6 @@ then
     echo "Invalid DESTDIR: $ascDest!" >&2;
     exit 1;
 fi
-
-# Display usage if no source directory and destination directory were
-# specified
-if [ "$#" -ne 2 ]
-then
-    echo "$USAGE";
-    echo "SOURCEDIR and DESTDIR not specified";
-    exit 1;
-#elif [ "$#" -eq 1 ]
-#then
-#    dbdRoot=$1;
-#    ascDest=$1;
-#elif [ "$#" -gt 1 ]
-#then
-#    dbdRoot=$1;
-#    ascDest=$2;
-fi
-
-# Set SOURCEDIR and DESTDIR
-dbdRoot=$1;
-ascDest=$2;
-
-# Get absolute paths for the source and destination directory
-dbdRoot=$(readlink -e $dbdRoot);
-ascDest=$(readlink -e $ascDest);
 
 # Display fully qualified path
 [ -z "$quiet" ] && echo "Binary source: $dbdRoot";
@@ -229,7 +226,6 @@ if [ -z "$local_cac_dir" ]
 then
     local_cac_dir=${DBD_CACHE_DIR:-${dbdRoot}/cache};
 fi
-local_cac_dir=$(readlink -e $local_cac_dir);
 # Create the sensor list cache directory if it doesn't exist
 if [ ! -d "$local_cac_dir" ]
 then
@@ -237,6 +233,7 @@ then
     mkdir -m 775 $local_cac_dir;
     [ "$?" -ne 0 ] && exit 1;
 fi
+local_cac_dir=$(readlink -e $local_cac_dir);
 [ -z "$quiet" ] && echo "Sensor list cache directory: $local_cac_dir";
 
 # Change to temporary directory
@@ -312,7 +309,7 @@ do
     segment=$(basename $dbdSource .${dbdExt});
 
     # Echo and suppress the trailing newline
-    echo '----';
+    [ -z "$quiet" ] && echo '----';
 
     # Append the corresponding science dat file extension to the segment name
     # to create the science data file name.
@@ -349,7 +346,7 @@ do
 	    fi
 
         [ -z "$quiet" ] && echo "Source science file: $sciSource";
-        [ -z "$quiet" ] &&echo "Converting & Merging flight and science data files...";
+        [ -z "$quiet" ] &&echo "Converting & Merging flight and science files";
 
         # Create the science data file .dba filename
         sciDba="${tmpDir}/${dbdSeg}_${sciExt}.dba";
@@ -378,9 +375,10 @@ do
         # will be empty, so we need to remove it
         if [ "$?" -ne 0 ]
         then
-            echo "Skipping segment: $segment";
+            echo "Skipping segment: $segment" >&2;
             rm $dbdDba;
             EXIT_STATUS=1;
+            continue;
         fi
 
         # Convert the $sciSource binary to ascii and write to *.dba file
@@ -406,7 +404,7 @@ do
         # data to the output destination
         if [ "$?" -ne 0 ]
         then
-            echo "Science conversion failed: Writing flight controller data ONLY...";
+            [ -z "$quiet" ] && echo "Science conversion failed: Writing flight controller data ONLY...";
             rm $sciDba;
             EXIT_STATUS=1;
         fi
@@ -434,7 +432,7 @@ do
                 continue;
             fi
 
-            echo "M-File Created: $mFile";
+            [ -z "$quiet" ] && echo "M-File Created: $mFile";
 
             # Increment the successful file counter if both $datFile and
             # $mFile exist
@@ -460,7 +458,7 @@ do
                 cat $dbdDba > $datFile;
             fi
 
-            echo "Output File Created: $datFile";
+            [ -z "$quiet" ] && echo "Output File Created: $datFile";
 
             # Increment the successful file counter if the move was successful
             convertedCount=$(( convertedCount + 1 ));
@@ -471,7 +469,7 @@ do
         fi
 
     else
-        echo "Converting flight data file ONLY...";
+        [ -z "$quiet" ] && echo "Converting flight data file ONLY";
 
         # Convert to ascii and write to *.dba file
         if [ -n "$sensor_filter" ]
@@ -493,7 +491,7 @@ do
         # Exit status == 0 if successful or 1 if failed
         if [ "$?" -ne 0 ]
         then
-            echo "Skipping segment: $segment";
+            echo "Skipping segment: $segment" >&2;
             rm $dbdDba;
             EXIT_STATUS=1;
             continue;
@@ -518,7 +516,7 @@ do
                 continue;
             fi
 
-            echo "M-File Created: $mFile";
+            [ -z "$quiet" ] && echo "M-File Created: $mFile";
 
             # Increment the successful file counter if both $datFile and
             # $mFile exist
@@ -534,7 +532,7 @@ do
                 continue;
             fi
 
-            echo "Output File Created: $datFile";
+            [ -z "$quiet" ] && echo "Output File Created: $datFile";
 
             # Increment the successful file counter if the move was successful
             convertedCount=$(( convertedCount + 1 ));
@@ -547,7 +545,7 @@ do
     cacFile="${local_cac_dir}/${cac}.cac";
     if [ -f "$cacFile" ]
     then 
-        echo "Updating $asciiExt ${cac}.cac permissions ($cacPerms)";
+        [ -z "$quiet" ] && echo "Updating $asciiExt ${cac}.cac permissions ($cacPerms)";
         oldPerms=$(stat --format=%a $cacFile);
         chmod $cacPerms $cacFile;
         newPerms=$(stat --format=%a $cacFile);
@@ -561,7 +559,7 @@ do
         sciCacFile="${local_cac_dir}/${sciCac}.cac";
         if [ -f "$sciCacFile" ]
         then 
-            echo "Updating $sciExt ${sciCac}.cac permissions ($cacPerms)";
+            [ -z "$quiet" ] && echo "Updating $sciExt ${sciCac}.cac permissions ($cacPerms)";
             oldPerms=$(stat --format=%a $sciCacFile);
             chmod $cacPerms $sciCacFile;
             newPerms=$(stat --format=%a $sciCacFile);
@@ -570,27 +568,27 @@ do
 
 done
 
+[ -z "$quiet" ] && echo '==============================================================================';
+[ -z "$quiet" ] && echo "$convertedCount/$dbdCount files successfully converted.";
+[ -z "$quiet" ] && echo '=============================================================================='
+
 # Move all remaining file in $tmpDir to $ascDest
 # Default exit status
-if [ "$dbdCount" -gt 0 ]
+[ "$convertedCount" -eq 0 ] && exit 1;
+
+[ -z "$quiet" ] && echo -n "Moving output files to destination: $ascDest...";
+status=$(mv ${tmpDir}/*.${dba_extension} $ascDest 2>&1);
+if [ "$?" -eq 0 ]
 then
-    echo -e "\n------------------------------------------------------------------------------";
-    echo -n "Moving output files to destination: $ascDest...";
-    status=$(mv ${tmpDir}/*.${dba_extension} $ascDest 2>&1);
-    if [ "$?" -eq 0 ]
-    then
-        echo "Done.";
-        # Set status to 0 to signal successful conversion
-        STATUS=0;
-    else
-        echo "Failed.";
-    fi
+    [ -z "$quiet" ] && echo "Done.";
+    # Set status to 0 to signal successful conversion
+    STATUS=0;
+else
+    [ -z "$quiet" ] && echo "Failed.";
 fi
+[ -z "$quiet" ] && echo '=============================================================================='
+
 # Remove $tmpDir
 rm -Rf $tmpDir;
-
-echo -e "==============================================================================\n";
-echo "$convertedCount/$dbdCount files successfully converted.";
-echo '=============================================================================='
 
 exit $STATUS;

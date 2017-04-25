@@ -63,6 +63,9 @@ DESCRIPTION
     -q
         Suppress STDOUT
 
+    -p
+        Print the path of each binary file that was successsfully converted to STDOUT
+
 ";
 
 # Default option values
@@ -71,7 +74,7 @@ local_twrc_exe_dir="${app_dir}/linux-bin";
 # Default ascii file extension
 dba_extension='dat';
 # Process options
-while getopts hf:c:me:b:q option
+while getopts hf:c:me:b:qp option
 do
 
     case "$option" in
@@ -97,6 +100,9 @@ do
             ;;
         "q")
             quiet=1;
+            ;;
+        "p")
+            printsuccess=1;
             ;;
         "?")
             exit 1;
@@ -468,6 +474,8 @@ do
 
         fi
 
+        [ -n "$printsuccess" ] && echo -e "$dbdSource\n$sciSource";
+
     else
         [ -z "$quiet" ] && echo "Converting flight data file ONLY";
 
@@ -537,6 +545,8 @@ do
             # Increment the successful file counter if the move was successful
             convertedCount=$(( convertedCount + 1 ));
         fi
+
+        [ -n "$printsuccess" ] && echo -e "$dbdSource";
 
     fi
 
